@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IA Criadora de Jogos 3D</title>
+    <style>
+        :root {
+            --bg-color: #FFFFFF;
+            --text-color: #1a1a1a;
+            --primary-color: #4A90E2;
+            --secondary-color: #F3F4F6;
+            --border-color: #E5E7EB;
+            --ai-message-bg: #F9FAFB;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: var(--secondary-color); color: var(--text-color); overflow: hidden; }
+        * { box-sizing: border-box; }
+        #app-container { display: flex; width: 100vw; height: 100vh; background-color: #FFF; }
+        #left-panel { width: 40%; min-width: 400px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        #right-panel { flex-grow: 1; display: flex; flex-direction: column; }
+        #chat-window { flex-grow: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { max-width: 90%; padding: 12px 18px; border-radius: 18px; line-height: 1.5; }
+        .user-message { background-color: var(--primary-color); color: white; align-self: flex-end; }
+        .ai-message { background-color: var(--ai-message-bg); color: var(--text-color); align-self: flex-start; white-space: pre-wrap; }
+        .thinking-bubble { font-style: italic; color: #6c757d; }
+        #input-area { padding: 15px; display: flex; gap: 10px; align-items: center; background: var(--secondary-color); border-top: 1px solid var(--border-color); }
+        #user-input { flex-grow: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: '8px'; font-size: 1rem; resize: none; height: 50px; }
+        #send-button { background-color: var(--primary-color); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        #preview-frame { flex-grow: 1; border: none; }
+        
+        @media (max-width: 768px) {
+            #app-container { flex-direction: column; }
+            #left-panel, #right-panel { width: 100%; min-width: unset; }
+            #left-panel { height: 40%; }
+            #right-panel { height: 60%; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <main id="left-panel">
+            <div id="chat-window">
+                </div>
+            <div id="input-area">
+                <textarea id="user-input" placeholder="Descreva o que fazer..."></textarea>
+                <button id="send-button">➤</button>
+            </div>
+        </main>
+        <aside id="right-panel">
+            <iframe id="preview-frame" title="Game Preview" sandbox="allow-scripts"></iframe>
+        </aside>
+    </div>
+
+    <script>
+        // --- Seletores de Elementos ---
+        const chatWindow = document.getElementById('chat-window');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const previewFrame = document.getElementById('preview-frame');
+
+        // --- Estado da Aplicação ---
+        let messages = [{ sender: 'ai', text: 'Olá! Descreva o jogo 3D que você quer criar.' }];
+        let projectState = { files: {} };
+        let isLoading = false;
+        
+        // --- Funções da UI ---
+        function renderMessages() {
+            chatWindow.innerHTML = '';
+            messages.forEach(msg => {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = `message ${msg.sender}-message`;
+                msgDiv.textContent = msg.text;
+                chatWindow.appendChild(msgDiv);
+            });
+
+            if (isLoading) {
+                const thinkingDiv = document.createElement('div');
+                thinkingDiv.className = 'message ai-message thinking-bubble';
+                thinkingDiv.textContent = 'Pensando...';
+                chatWindow.appendChild(thinkingDiv);
+            }
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        function updatePreview(htmlContent) {
+            previewFrame.srcdoc = htmlContent || '<html><body style="background:#000; color: #fff; display:flex; align-items:center; justify-content:center; font-family: sans-serif;">Aguardando o primeiro comando...</body></html>';
+        }
+
+        // --- Lógica Principal ---
+        async function handleSubmit() {
+            const prompt = userInput.value.trim();
+            if (!prompt || isLoading) return;
+
+            messages.push({ sender: 'user', text: prompt });
+            isLoading = true;
+            userInput.value = '';
+            userInput.disabled = true;
+            sendButton.disabled = true;
+            renderMessages();
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userPrompt: prompt, projectState }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Erro no servidor: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                let aiMessageText = "Ação concluída. O preview foi atualizado.";
+                if (data.aiResponse?.action === 'CHAT_MESSAGE') {
+                    aiMessageText = data.aiResponse.content;
+                } else if (data.aiResponse?.action === 'CREATE_OR_UPDATE_FILE') {
+                    aiMessageText = `Ok, eu atualizei o arquivo \`${data.aiResponse.fileName}\`. O preview foi atualizado.`;
+                }
+                
+                messages.push({ sender: 'ai', text: aiMessageText });
+                projectState = data.newProjectState;
+                updatePreview(data.gameHtml);
+
+            } catch (error) {
+                messages.push({ sender: 'ai', text: `Desculpe, ocorreu um erro: ${error.message}` });
+            } finally {
+                isLoading = false;
+                userInput.disabled = false;
+                sendButton.disabled = false;
+                renderMessages();
+            }
+        }
+
+        // --- Event Listeners ---
+        sendButton.addEventListener('click', handleSubmit);
+        userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit();
+            }
+        });
+
+        // --- Inicialização ---
+        renderMessages();
+        updatePreview('');
+
+    </script>
+</body>
+</html>
